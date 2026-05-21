@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>디지털 문물 블라인드 박스</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+<script src="https://unpkg.com/ml5@0.12.2/dist/ml5.min.js"></script>
+<script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+
+<style>
+body{
+  margin:0;
+  overflow:hidden;
+  background:
+    radial-gradient(circle at center, rgba(246,235,214,0.96) 0%, rgba(211,184,143,0.88) 55%, rgba(77,55,38,0.82) 100%);
+  font-family:"Noto Serif KR","Apple SD Gothic Neo",serif;
+}
+
+model-viewer{
+  position:absolute;
+  left:0;
+  top:0;
+  width:100vw;
+  height:100vh;
+  display:none;
+  z-index:0;
+  background:transparent;
+}
+
+canvas{
+  position:absolute;
+  left:0;
+  top:0;
+  z-index:10;
+  pointer-events:none;
+}
+</style>
+</head>
+
+<body>
+
+<model-viewer
+  id="artifact"
+  src="assets/houmuwuding.glb"
+  camera-controls
+  camera-orbit="0deg 75deg 3m"
+  field-of-view="27deg"
+  exposure="1"
+  shadow-intensity="0.75">
+</model-viewer>
+
+<script src="sketch.js"></script>
+
+</body>
+</html>
