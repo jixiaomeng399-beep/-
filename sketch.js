@@ -1,73 +1,166 @@
-let video, handpose, artifact;
+let video;
+let handpose;
+let artifact;
+
 let predictions = [];
+let cameraReady = false;
 
-// 当前抽中的模型
-let selectedArtifact = null;
-let lastArtifactFile = null;
+// =====================================================
+// 音频
+// =====================================================
 
-// 4 个盲盒模型：原来的 1 个 + 新加的 3 个
-// weight 越小，被抽中的概率越低
+let backgroundSound;
+let shakeSound;
+let winSound;
+let loseSound;
+
+// =====================================================
+// 游戏参数
+// =====================================================
+
+const SHAKE_TARGET = 4;
+const CHOICE_HOLD_TARGET = 24;
+const RESET_HOLD_TARGET = 28;
+
+// =====================================================
+// 文物资料
+// =====================================================
+
 const artifactList = [
   {
     name: "후모무정 / 后母戊鼎",
     file: "assets/houmuwuding.glb",
     weight: 1,
-    desc: "상나라 후기의 대표적인 청동 예기로, 고대 중국 청동기 문화의 권위와 제례적 상징성을 보여주는 문물입니다."
+    desc:
+      "상나라 후기의 대표적인 청동 예기로, 고대 중국 청동기 문화의 권위와 제례적 상징성을 보여주는 문물입니다."
   },
   {
     name: "청화 도자기 인물",
     file: "assets/porcelain.glb",
     weight: 1,
-    desc: "청화백자의 색채와 장식성을 바탕으로 한 인물형 문물로, 전통 도자기의 장식미와 조형적 아름다움을 보여줍니다."
+    desc:
+      "청화백자의 색채와 장식성을 바탕으로 한 인물형 문물로, 전통 도자기의 장식미와 조형적 아름다움을 보여줍니다."
   },
   {
     name: "도자기 낙타",
     file: "assets/camel.glb",
     weight: 1,
-    desc: "낙타 형상의 도자기 문물로, 교역로와 이동 문화, 그리고 고대 생활 속 동물 상징을 떠올리게 하는 컬렉션입니다."
+    desc:
+      "낙타 형상의 도자기 문물로, 교역로와 이동 문화, 그리고 고대 생활 속 동물 상징을 떠올리게 하는 컬렉션입니다."
   },
   {
     name: "연꽃 캐릭터 문물",
     file: "assets/character.glb",
     weight: 0.45,
-    desc: "연꽃 이미지를 현대적인 캐릭터 형식으로 재해석한 문물로, 전통 상징과 귀여운 조형미를 결합한 박물관 컬렉션입니다."
+    desc:
+      "연꽃 이미지를 현대적인 캐릭터 형식으로 재해석한 문물로, 전통 상징과 귀여운 조형미를 결합한 박물관 컬렉션입니다."
   }
 ];
 
-let opened = false;
-let opening = false;
+// =====================================================
+// 游戏状态
+// =====================================================
+
+let gameStage = "shaking";
+let stageFrame = 0;
+
+let selectedArtifact = null;
+let lastArtifactFile = null;
+
+// =====================================================
+// 摇动识别
+// =====================================================
 
 let shakeCount = 0;
 let lastShakeX = null;
 let shakeCooldown = 0;
-let openProgress = 0;
+
+// =====================================================
+// 三个盲盒
+// =====================================================
+
+let roundBoxes = [];
+
+let selectedBoxIndex = 1;
+let previousBoxIndex = 1;
+
+let choiceHoldFrames = 0;
+let openingProgress = 0;
+
+let selectedRoundItem = null;
+
+// =====================================================
+// 粒子
+// =====================================================
 
 let particles = [];
+
+// =====================================================
+// 3D模型控制
+// =====================================================
 
 let theta = 0;
 let phi = 75;
 let radius = 3;
+
 let targetTheta = 0;
 let targetPhi = 75;
 let targetRadius = 3;
+
 let lastHandX = null;
 
-let cameraReady = false;
+// =====================================================
+// 文物重力与回弹
+// =====================================================
 
-// 다시 뽑기 전환 애니메이션
-let resetAnimation = false;
+let artifactAnimY = 0;
+let artifactVelocityY = 0;
+let artifactGravity = 0.68;
+
+let artifactAnimScale = 1;
+let artifactSpinVelocity = 0;
+
+let artifactBounceCount = 0;
+let artifactAnimSettled = false;
+
+let impactPulse = 0;
+
+// =====================================================
+// 空盒纸条
+// =====================================================
+
+let dudPaper = null;
+
+// =====================================================
+// 重新抽取
+// =====================================================
+
 let resetProgress = 0;
 
-// 손가락 하트 유지 시간
 let heartHoldFrames = 0;
+let resetGestureArmed = false;
+let resetReleaseFrames = 0;
+
+let resultGraceFrames = 0;
+
+// =====================================================
+// 初始化
+// =====================================================
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
 
-  artifact = document.getElementById("artifact");
-  artifact.setAttribute("camera-orbit", "0deg 75deg 3m");
+  setupAudio();
 
-  // 摄像头
+  artifact = document.getElementById("artifact");
+
+  artifact.setAttribute(
+    "camera-orbit",
+    "0deg 75deg 3m"
+  );
+
+  artifact.style.display = "none";
+
   video = createCapture(VIDEO, function () {
     console.log("摄像头已经启动");
     cameraReady = true;
@@ -76,9 +169,9 @@ function setup() {
   video.size(640, 480);
   video.hide();
 
-  // 手势识别
   handpose = ml5.handpose(video, modelReady);
-  handpose.on("predict", function(results) {
+
+  handpose.on("predict", function (results) {
     predictions = results;
   });
 }
@@ -87,574 +180,2739 @@ function modelReady() {
   console.log("ml5 handpose ready");
 }
 
-function draw() {
-  clear();
+// =====================================================
+// 音频
+// =====================================================
 
-  if (resetAnimation) {
-    playResetAnimation();
-    drawCameraPanel();
-    drawHandSkeleton();
-    updateParticles();
+function setupAudio() {
+  backgroundSound = new Audio(
+    "assets/audio/background.mp3"
+  );
+
+  backgroundSound.loop = true;
+  backgroundSound.volume = 0.18;
+  backgroundSound.preload = "auto";
+
+  shakeSound = new Audio(
+    "assets/audio/shake.mp3"
+  );
+
+  shakeSound.volume = 0.6;
+  shakeSound.preload = "auto";
+
+  winSound = new Audio(
+    "assets/audio/win.mp3"
+  );
+
+  winSound.volume = 0.75;
+  winSound.preload = "auto";
+
+  loseSound = new Audio(
+    "assets/audio/lose.mp3"
+  );
+
+  loseSound.volume = 0.82;
+  loseSound.preload = "auto";
+
+  startBackgroundMusic();
+
+  window.addEventListener(
+    "pointerdown",
+    startBackgroundMusic,
+    { passive: true }
+  );
+
+  window.addEventListener(
+    "touchstart",
+    startBackgroundMusic,
+    { passive: true }
+  );
+
+  window.addEventListener(
+    "keydown",
+    startBackgroundMusic
+  );
+
+  document.addEventListener(
+    "visibilitychange",
+    function () {
+      if (!document.hidden) {
+        startBackgroundMusic();
+      }
+    }
+  );
+}
+
+function startBackgroundMusic() {
+  if (
+    !backgroundSound ||
+    !backgroundSound.paused
+  ) {
     return;
   }
 
-  if (!opened) {
+  backgroundSound.play().catch(function () {
+    console.log("浏览器等待用户点击后播放背景音乐");
+  });
+}
+
+function playSoundEffect(soundFile, volumeValue) {
+  if (!soundFile) {
+    return;
+  }
+
+  const soundInstance = soundFile.cloneNode(true);
+
+  soundInstance.volume = volumeValue;
+
+  soundInstance.play().catch(function (error) {
+    console.warn("音效播放失败：", error);
+  });
+}
+
+// =====================================================
+// 主循环
+// =====================================================
+
+function draw() {
+  clear();
+
+  stageFrame++;
+
+  if (gameStage === "shaking") {
     drawInterfaceBase();
     drawTitle();
-    drawBoxObject();
-    drawLeftGuide();
+    drawMainBlindBox();
+    drawShakeGuide();
     drawProgressPanel();
     drawCameraPanel();
     drawHandSkeleton();
-
-    // 不需要按空格，直接检测摇手
     checkShake();
-  } else {
-    artifact.style.display = "block";
-    controlModelByHand();
-    drawOpenedOverlay();
+  } else if (gameStage === "choosing") {
+    drawInterfaceBase();
+    drawTitle();
+    drawChoiceGuide();
+    drawChoiceBoxes(0);
     drawCameraPanel();
     drawHandSkeleton();
-
-    // 开盒后检测手指比心
+    updateBoxSelection();
+  } else if (gameStage === "opening") {
+    drawInterfaceBase();
+    drawTitle();
+    drawChoiceGuide();
+    drawChoiceBoxes(openingProgress);
+    drawCameraPanel();
+    drawHandSkeleton();
+    updateOpeningAnimation();
+  } else if (gameStage === "artifactResult") {
+    updateArtifactAnimation();
+    drawArtifactResultOverlay();
+    drawCameraPanel();
+    drawHandSkeleton();
     checkHeartReset();
+  } else if (gameStage === "dudResult") {
+    drawInterfaceBase();
+    drawTitle();
+    drawDudBackgroundBoxes();
+    updateDudPaper();
+    drawDudPaper();
+    drawDudResultOverlay();
+    drawCameraPanel();
+    drawHandSkeleton();
+    checkHeartReset();
+  } else if (gameStage === "resetting") {
+    playResetAnimation();
+    drawCameraPanel();
+    drawHandSkeleton();
   }
 
   updateParticles();
 
-  if (opening) {
-    playOpenParticles();
-  }
-
   if (shakeCooldown > 0) {
     shakeCooldown--;
   }
+
+  if (impactPulse > 0) {
+    impactPulse *= 0.88;
+  }
 }
 
+// =====================================================
+// 页面基础布局
+// =====================================================
+
 function drawInterfaceBase() {
-  clear();
-
   noStroke();
-  fill(255, 248, 232, 48);
-  rect(10, 10, width - 20, height - 20, 18);
 
-  stroke(86, 62, 42, 70);
+  fill(255, 248, 232, 30);
+
+  rect(
+    10,
+    10,
+    width - 20,
+    height - 20,
+    18
+  );
+
+  stroke(86, 62, 42, 55);
   strokeWeight(2);
   noFill();
-  rect(18, 18, width - 36, height - 36, 18);
+
+  rect(
+    18,
+    18,
+    width - 36,
+    height - 36,
+    18
+  );
 
   noStroke();
-  fill(255, 255, 255, 42);
-  ellipse(width / 2, height / 2 + 38, 780, 490);
 
-  fill(210, 175, 110, 38);
-  ellipse(width / 2, height / 2 + 120, 560, 210);
+  fill(255, 255, 255, 25);
+
+  ellipse(
+    getGameCenterX(),
+    height / 2 + 38,
+    690,
+    440
+  );
+
+  fill(210, 175, 110, 25);
+
+  ellipse(
+    getGameCenterX(),
+    height / 2 + 120,
+    500,
+    185
+  );
 }
 
 function drawTitle() {
   fill("#2f2318");
+
   textAlign(CENTER);
   textStyle(BOLD);
   textSize(42);
-  text("디지털 문물 블라인드 박스", width / 2, 76);
+
+  text(
+    "디지털 문물 블라인드 박스",
+    width / 2,
+    76
+  );
 
   textStyle(NORMAL);
   textSize(16);
+
   fill("#6b5540");
-  text("손동작으로 개봉하는 인터랙티브 박물관 컬렉션", width / 2, 108);
+
+  text(
+    "손동작으로 개봉하는 인터랙티브 박물관 컬렉션",
+    width / 2,
+    108
+  );
 
   noFill();
+
   stroke(150, 116, 70, 95);
   strokeWeight(1.5);
-  rect(width / 2 - 360, 34, 720, 95, 18);
+
+  rect(
+    width / 2 - 360,
+    34,
+    720,
+    95,
+    18
+  );
 }
 
-function drawBoxObject() {
-  push();
-  translate(width / 2, height / 2 + 35);
+// =====================================================
+// 摄像头位置
+// =====================================================
 
-  if (predictions.length > 0 && shakeCount > 0) {
-    rotate(sin(frameCount * 0.75) * 0.12);
+function getCameraLayout() {
+  let camW;
+  let camH;
+
+  if (
+    width < 1200 ||
+    height < 760
+  ) {
+    camW = 260;
+    camH = 195;
+  } else {
+    camW = 300;
+    camH = 225;
+  }
+
+  return {
+    x: width - camW - 26,
+    y: height - camH - 48,
+    w: camW,
+    h: camH
+  };
+}
+
+// =====================================================
+// 游戏区域
+// =====================================================
+
+function getGameBounds() {
+  if (width < 900) {
+    return {
+      left: 20,
+      right: width - 20
+    };
+  }
+
+  const camera = getCameraLayout();
+
+  return {
+    left: 270,
+    right: camera.x - 48
+  };
+}
+
+function getGameCenterX() {
+  const bounds = getGameBounds();
+
+  return (
+    bounds.left +
+    bounds.right
+  ) / 2;
+}
+
+function getBoxPositions() {
+  const bounds = getGameBounds();
+
+  const center =
+    (
+      bounds.left +
+      bounds.right
+    ) / 2;
+
+  const available =
+    bounds.right -
+    bounds.left;
+
+  const spacing = constrain(
+    available * 0.29,
+    145,
+    230
+  );
+
+  const boxY =
+    height / 2 + 45;
+
+  return [
+    {
+      x: center - spacing,
+      y: boxY
+    },
+    {
+      x: center,
+      y: boxY
+    },
+    {
+      x: center + spacing,
+      y: boxY
+    }
+  ];
+}
+
+function drawPanel(x, y, w, h) {
+  noStroke();
+
+  fill(255, 248, 232, 126);
+
+  rect(
+    x,
+    y,
+    w,
+    h,
+    18
+  );
+
+  noFill();
+
+  stroke(139, 104, 58, 110);
+  strokeWeight(1.5);
+
+  rect(
+    x,
+    y,
+    w,
+    h,
+    18
+  );
+}
+
+// =====================================================
+// 初始盲盒
+// =====================================================
+
+function drawMainBlindBox() {
+  push();
+
+  translate(
+    getGameCenterX(),
+    height / 2 + 25
+  );
+
+  if (
+    predictions.length > 0 &&
+    shakeCount > 0
+  ) {
+    rotate(
+      sin(frameCount * 0.75) * 0.12
+    );
   }
 
   drawingContext.shadowBlur = 42;
-  drawingContext.shadowColor = "rgba(88, 58, 28, 0.45)";
+  drawingContext.shadowColor =
+    "rgba(88, 58, 28, 0.45)";
 
   rectMode(CENTER);
+
   fill(43, 73, 56, 238);
   stroke(204, 164, 88, 235);
   strokeWeight(8);
-  rect(0, 0, 380, 270, 34);
+
+  rect(
+    0,
+    0,
+    350,
+    245,
+    32
+  );
 
   noStroke();
+
   fill(218, 176, 84, 238);
-  rect(0, -54, 405, 34, 17);
+
+  rect(
+    0,
+    -49,
+    374,
+    31,
+    16
+  );
 
   fill(255, 232, 150);
+
   textAlign(CENTER);
   textStyle(BOLD);
-  textSize(96);
-  text("?", 0, 40);
+  textSize(88);
+
+  text(
+    "?",
+    0,
+    38
+  );
 
   textStyle(NORMAL);
-  textSize(14);
+  textSize(13);
+
   fill(238, 218, 168);
-  text("HERITAGE COLLECTION", 0, 112);
+
+  text(
+    "HERITAGE COLLECTION",
+    0,
+    101
+  );
 
   pop();
 }
+
+// =====================================================
+// 左侧说明框
+// =====================================================
 
 function drawGuideStep(num, title, x, y) {
   noStroke();
 
   fill("#d7ad52");
-  circle(x, y - 5, 28);
+
+  circle(
+    x,
+    y - 4,
+    24
+  );
 
   fill("#3b2a1f");
+
   textAlign(CENTER);
   textStyle(BOLD);
-  textSize(15);
-  text(num, x, y);
+  textSize(13);
+
+  text(
+    num,
+    x,
+    y
+  );
 
   fill("#4c3929");
+
   textAlign(LEFT);
   textStyle(NORMAL);
-  textSize(15);
-  text(title, x + 28, y);
+  textSize(13);
+
+  text(
+    title,
+    x + 23,
+    y
+  );
 }
 
-function drawLeftGuide() {
-  let x = 44;
-  let y = 155;
-  let w = 270;
-  let h = 285;
+function drawShakeGuide() {
+  const x = 28;
+  const y = 150;
+  const w = 225;
+  const h = 240;
 
-  drawPanel(x, y, w, h);
+  drawPanel(
+    x,
+    y,
+    w,
+    h
+  );
 
   fill("#3b2a1f");
+
   textAlign(CENTER);
   textStyle(BOLD);
-  textSize(19);
-  text("체험 방법", x + w / 2, y + 42);
+  textSize(17);
 
-  drawGuideStep("1", "손을 카메라 안에 넣기", x + 55, y + 96);
-  drawGuideStep("2", "손을 좌우로 흔들기", x + 55, y + 154);
-  drawGuideStep("3", "8회 흔들면 박스 개봉", x + 55, y + 212);
+  text(
+    "체험 방법",
+    x + w / 2,
+    y + 34
+  );
+
+  drawGuideStep(
+    "1",
+    "손을 카메라에 넣기",
+    x + 42,
+    y + 78
+  );
+
+  drawGuideStep(
+    "2",
+    "손을 좌우로 흔들기",
+    x + 42,
+    y + 126
+  );
+
+  drawGuideStep(
+    "3",
+    "4회 흔들면 상자 등장",
+    x + 42,
+    y + 174
+  );
 
   textStyle(NORMAL);
-  textSize(12);
+  textSize(11);
+
   fill("#8a6840");
+
   textAlign(CENTER);
-  text("개봉 후 손가락 하트 동작으로 다시 뽑기", x + w / 2, y + 255);
+
+  text(
+    "상자 등장 후 하나를 선택하세요",
+    x + w / 2,
+    y + 215
+  );
 }
 
-function drawProgressPanel() {
-  let x = 44;
-  let y = height - 245;
-  let w = 270;
-  let h = 135;
+function drawChoiceGuide() {
+  const x = 28;
+  const y = 150;
+  const w = 225;
+  const h = 240;
 
-  drawPanel(x, y, w, h);
+  drawPanel(
+    x,
+    y,
+    w,
+    h
+  );
 
   fill("#3b2a1f");
+
   textAlign(CENTER);
   textStyle(BOLD);
-  textSize(16);
-  text("개봉 진행도", x + w / 2, y + 34);
+  textSize(17);
 
-  for (let i = 0; i < 8; i++) {
-    if (i < shakeCount) fill("#d7ad52");
-    else fill(255, 255, 255, 130);
+  text(
+    "블라인드 박스 선택",
+    x + w / 2,
+    y + 34
+  );
+
+  drawGuideStep(
+    "1",
+    "손을 좌우로 이동하기",
+    x + 42,
+    y + 78
+  );
+
+  drawGuideStep(
+    "2",
+    "빛나는 상자 확인하기",
+    x + 42,
+    y + 126
+  );
+
+  drawGuideStep(
+    "3",
+    "엄지와 검지를 맞대기",
+    x + 42,
+    y + 174
+  );
+
+  textStyle(NORMAL);
+  textSize(11);
+
+  fill("#8a6840");
+
+  textAlign(CENTER);
+
+  text(
+    "세 상자 중 하나는 꽝입니다",
+    x + w / 2,
+    y + 215
+  );
+}
+
+// =====================================================
+// 摇动进度框
+// =====================================================
+
+function drawProgressPanel() {
+  const x = 28;
+  const y = height - 155;
+  const w = 225;
+  const h = 112;
+
+  drawPanel(
+    x,
+    y,
+    w,
+    h
+  );
+
+  fill("#3b2a1f");
+
+  textAlign(CENTER);
+  textStyle(BOLD);
+  textSize(14);
+
+  text(
+    "개봉 진행도",
+    x + w / 2,
+    y + 27
+  );
+
+  for (
+    let i = 0;
+    i < SHAKE_TARGET;
+    i++
+  ) {
+    if (i < shakeCount) {
+      fill("#d7ad52");
+    } else {
+      fill(255, 255, 255, 130);
+    }
 
     stroke("#8a6840");
     strokeWeight(1);
+
     push();
-    translate(x + 54 + i * 24, y + 65);
+
+    translate(
+      x + 66 + i * 31,
+      y + 51
+    );
+
     rotate(PI / 4);
     rectMode(CENTER);
-    rect(0, 0, 12, 12);
+
+    rect(
+      0,
+      0,
+      14,
+      14
+    );
+
     pop();
   }
 
   noStroke();
-  fill("#3b2a1f");
-  textSize(28);
-  text(shakeCount + " / 8", x + w / 2, y + 106);
 
-  if (predictions.length > 0 && !opened) {
-    textSize(13);
+  fill("#3b2a1f");
+  textSize(22);
+
+  text(
+    shakeCount +
+    " / " +
+    SHAKE_TARGET,
+    x + w / 2,
+    y + 84
+  );
+
+  if (
+    predictions.length > 0
+  ) {
+    textSize(11);
     fill("#8a5d20");
-    text("손을 좌우로 흔들어 주세요", x + w / 2, y + 126);
+
+    text(
+      "손을 좌우로 흔들어 주세요",
+      x + w / 2,
+      y + 103
+    );
   }
 }
 
-function drawPanel(x, y, w, h) {
-  noStroke();
-  fill(255, 248, 232, 112);
-  rect(x, y, w, h, 20);
-
-  noFill();
-  stroke(139, 104, 58, 110);
-  strokeWeight(1.5);
-  rect(x, y, w, h, 20);
-}
+// =====================================================
+// 右下角摄像头
+// =====================================================
 
 function drawCameraPanel() {
-  let camW = 340;
-  let camH = 255;
-  let x = width - camW - 42;
-  let y = 180;
+  const layout = getCameraLayout();
 
-  drawPanel(x - 14, y - 48, camW + 28, camH + 88);
+  const x = layout.x;
+  const y = layout.y;
+  const camW = layout.w;
+  const camH = layout.h;
+
+  drawPanel(
+    x - 10,
+    y - 36,
+    camW + 20,
+    camH + 68
+  );
 
   fill("#3b2a1f");
+
   textAlign(CENTER);
   textStyle(BOLD);
-  textSize(15);
-  text("손 인식 카메라", x + camW / 2, y - 20);
+  textSize(13);
 
-  if (cameraReady && video) {
+  text(
+    "손 인식 카메라",
+    x + camW / 2,
+    y - 14
+  );
+
+  if (
+    cameraReady &&
+    video
+  ) {
     push();
-    translate(x + camW, y);
+
+    translate(
+      x + camW,
+      y
+    );
+
     scale(-1, 1);
-    image(video, 0, 0, camW, camH);
+
+    image(
+      video,
+      0,
+      0,
+      camW,
+      camH
+    );
+
     pop();
   } else {
     noStroke();
+
     fill(255, 248, 232, 180);
-    rect(x, y, camW, camH, 14);
+
+    rect(
+      x,
+      y,
+      camW,
+      camH,
+      12
+    );
 
     fill("#5d4937");
+
     textAlign(CENTER);
     textStyle(NORMAL);
-    textSize(15);
-    text("카메라 권한을 허용해 주세요", x + camW / 2, y + camH / 2);
+    textSize(13);
+
+    text(
+      "카메라 권한을 허용해 주세요",
+      x + camW / 2,
+      y + camH / 2
+    );
   }
 
   noFill();
+
   stroke(205, 156, 62, 190);
   strokeWeight(2);
-  rect(x, y, camW, camH, 14);
+
+  rect(
+    x,
+    y,
+    camW,
+    camH,
+    12
+  );
 
   noStroke();
-  fill(predictions.length > 0 ? "#9cff63" : "#6b5540");
-  circle(x + 70, y + camH + 28, 10);
+
+  if (
+    predictions.length > 0
+  ) {
+    fill("#9cff63");
+  } else {
+    fill("#6b5540");
+  }
+
+  circle(
+    x + 38,
+    y + camH + 22,
+    9
+  );
 
   fill("#3b2a1f");
-  textSize(14);
 
-  if (!opened) {
-    text(
-      predictions.length > 0 ? "손 인식 중: 좌우로 흔들어 주세요" : "손을 화면 안에 넣어 주세요",
-      x + camW / 2,
-      y + camH + 33
-    );
-  } else {
-    text(
-      predictions.length > 0 ? "손가락 하트: 다시 뽑기" : "손을 화면 안에 넣어 주세요",
-      x + camW / 2,
-      y + camH + 33
-    );
-  }
+  textAlign(CENTER);
+  textSize(12);
+  textStyle(NORMAL);
+
+  text(
+    getCameraStatusText(),
+    x + camW / 2,
+    y + camH + 27
+  );
 }
 
+function getCameraStatusText() {
+  if (
+    predictions.length === 0
+  ) {
+    return "손을 화면 안에 넣어 주세요";
+  }
+
+  if (
+    gameStage === "shaking"
+  ) {
+    return "손 인식 중: 좌우로 4회 흔들기";
+  }
+
+  if (
+    gameStage === "choosing"
+  ) {
+    return "좌우 이동 후 손가락을 맞대어 선택";
+  }
+
+  if (
+    gameStage === "opening"
+  ) {
+    return "선택한 상자를 개봉하고 있습니다";
+  }
+
+  if (
+    gameStage === "artifactResult"
+  ) {
+    if (
+      artifactAnimSettled
+    ) {
+      return "손가락 하트: 다시 뽑기";
+    }
+
+    return "문물이 나타나고 있습니다";
+  }
+
+  if (
+    gameStage === "dudResult"
+  ) {
+    if (
+      dudPaper &&
+      dudPaper.settled
+    ) {
+      return "손가락 하트: 다시 뽑기";
+    }
+
+    return "오늘의 운세를 확인하세요";
+  }
+
+  return "다시 뽑기를 준비하고 있습니다";
+}
+
+// =====================================================
+// 手部骨骼
+// =====================================================
+
 function drawHandSkeleton() {
-  if (predictions.length === 0 || !video) return;
+  if (
+    predictions.length === 0 ||
+    !video
+  ) {
+    return;
+  }
 
-  let hand = predictions[0];
+  const hand = predictions[0];
 
-  let camW = 340;
-  let camH = 255;
-  let camX = width - camW - 42;
-  let camY = 180;
+  const layout = getCameraLayout();
 
-  let pts = hand.landmarks.map(function(p) {
-    return {
-      x: map(p[0], 0, video.width, camX + camW, camX),
-      y: map(p[1], 0, video.height, camY, camY + camH)
-    };
-  });
+  const camX = layout.x;
+  const camY = layout.y;
+  const camW = layout.w;
+  const camH = layout.h;
 
-  let connections = [
-    [0, 1], [1, 2], [2, 3], [3, 4],
-    [0, 5], [5, 6], [6, 7], [7, 8],
-    [0, 9], [9, 10], [10, 11], [11, 12],
-    [0, 13], [13, 14], [14, 15], [15, 16],
-    [0, 17], [17, 18], [18, 19], [19, 20]
+  const pts = hand.landmarks.map(
+    function (point) {
+      return {
+        x: map(
+          point[0],
+          0,
+          video.width,
+          camX + camW,
+          camX
+        ),
+
+        y: map(
+          point[1],
+          0,
+          video.height,
+          camY,
+          camY + camH
+        )
+      };
+    }
+  );
+
+  const connections = [
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [3, 4],
+
+    [0, 5],
+    [5, 6],
+    [6, 7],
+    [7, 8],
+
+    [0, 9],
+    [9, 10],
+    [10, 11],
+    [11, 12],
+
+    [0, 13],
+    [13, 14],
+    [14, 15],
+    [15, 16],
+
+    [0, 17],
+    [17, 18],
+    [18, 19],
+    [19, 20]
   ];
 
   stroke(255, 226, 70, 210);
   strokeWeight(2);
 
-  for (let c of connections) {
-    line(pts[c[0]].x, pts[c[0]].y, pts[c[1]].x, pts[c[1]].y);
+  for (
+    const connection
+    of connections
+  ) {
+    line(
+      pts[connection[0]].x,
+      pts[connection[0]].y,
+      pts[connection[1]].x,
+      pts[connection[1]].y
+    );
   }
 
   noStroke();
 
-  for (let i = 0; i < pts.length; i++) {
+  for (
+    let i = 0;
+    i < pts.length;
+    i++
+  ) {
     fill(180, 255, 95, 155);
-    circle(pts[i].x, pts[i].y, 14);
+
+    circle(
+      pts[i].x,
+      pts[i].y,
+      11
+    );
 
     fill(255, 226, 70, 235);
-    circle(pts[i].x, pts[i].y, 6);
+
+    circle(
+      pts[i].x,
+      pts[i].y,
+      5
+    );
   }
 }
 
-function checkShake() {
-  if (opened || opening || resetAnimation) return;
+// =====================================================
+// 摇动检测
+// =====================================================
 
-  if (predictions.length === 0) {
+function checkShake() {
+  if (
+    gameStage !== "shaking"
+  ) {
+    return;
+  }
+
+  if (
+    predictions.length === 0
+  ) {
     lastShakeX = null;
     return;
   }
 
-  let x = predictions[0].landmarks[0][0];
+  const x =
+    predictions[0]
+      .landmarks[0][0];
 
-  if (lastShakeX === null) {
+  if (
+    lastShakeX === null
+  ) {
     lastShakeX = x;
     return;
   }
 
-  if (shakeCooldown > 0) {
+  if (
+    shakeCooldown > 0
+  ) {
     return;
   }
 
-  let move = abs(x - lastShakeX);
+  const move =
+    abs(
+      x -
+      lastShakeX
+    );
 
-  if (move > 42) {
+  if (
+    move > 42
+  ) {
     shakeCount++;
+
     lastShakeX = x;
     shakeCooldown = 10;
 
-    for (let i = 0; i < 22; i++) {
-      particles.push(createParticle(width / 2, height / 2 + 30, false));
+    startBackgroundMusic();
+
+    playSoundEffect(
+      shakeSound,
+      0.6
+    );
+
+    for (
+      let i = 0;
+      i < 22;
+      i++
+    ) {
+      particles.push(
+        createParticle(
+          getGameCenterX(),
+          height / 2 + 30,
+          false
+        )
+      );
     }
   }
 
-  if (shakeCount >= 8) {
-    opening = true;
-    openProgress = 0;
-    particles = [];
+  if (
+    shakeCount >=
+    SHAKE_TARGET
+  ) {
+    beginBoxSelection();
+  }
+}
 
-    for (let i = 0; i < 360; i++) {
-      particles.push(createParticle(width / 2, height / 2 + 20, true));
+// =====================================================
+// 创建三个盲盒
+// =====================================================
+
+function beginBoxSelection() {
+  gameStage = "choosing";
+  stageFrame = 0;
+
+  roundBoxes =
+    createRoundBoxes();
+
+  selectedBoxIndex = 1;
+  previousBoxIndex = 1;
+
+  choiceHoldFrames = 0;
+  openingProgress = 0;
+
+  selectedRoundItem = null;
+  lastShakeX = null;
+
+  artifact.style.display = "none";
+
+  const positions =
+    getBoxPositions();
+
+  for (
+    const position
+    of positions
+  ) {
+    for (
+      let i = 0;
+      i < 42;
+      i++
+    ) {
+      particles.push(
+        createParticle(
+          position.x,
+          position.y,
+          false
+        )
+      );
     }
   }
 }
 
-function createParticle(cx, cy, big) {
-  let a = random(TWO_PI);
-  let spd = big ? random(2.2, 9.2) : random(0.8, 2.8);
+function createRoundBoxes() {
+  const first =
+    weightedPickArtifact(
+      new Set(),
+      true
+    );
 
-  return {
-    x: cx + random(-90, 90),
-    y: cy + random(-70, 70),
-    vx: cos(a) * spd,
-    vy: sin(a) * spd,
-    size: big ? random(3, 9) : random(2, 5),
-    life: big ? random(90, 145) : random(45, 70),
-    alpha: big ? random(145, 230) : random(90, 150)
-  };
+  const second =
+    weightedPickArtifact(
+      new Set([
+        first.file
+      ]),
+      false
+    );
+
+  const boxes = [
+    {
+      type: "artifact",
+      data: first
+    },
+    {
+      type: "artifact",
+      data: second
+    },
+    {
+      type: "dud",
+      data: null
+    }
+  ];
+
+  shuffleArray(boxes);
+
+  return boxes;
 }
 
-// 加权随机抽取模型，并尽量避免连续抽到同一个
-function chooseRandomArtifact() {
-  let picked = null;
+function weightedPickArtifact(
+  excludedFiles,
+  avoidLast
+) {
+  let candidates =
+    artifactList.filter(
+      function (item) {
+        if (
+          excludedFiles.has(
+            item.file
+          )
+        ) {
+          return false;
+        }
 
-  for (let attempt = 0; attempt < 10; attempt++) {
-    let totalWeight = 0;
+        if (
+          avoidLast &&
+          artifactList.length > 1 &&
+          item.file ===
+            lastArtifactFile
+        ) {
+          return false;
+        }
 
-    for (let item of artifactList) {
-      totalWeight += item.weight;
-    }
-
-    let r = random(totalWeight);
-    let sum = 0;
-
-    for (let item of artifactList) {
-      sum += item.weight;
-
-      if (r <= sum) {
-        picked = item;
-        break;
+        return true;
       }
-    }
+    );
 
-    if (picked && picked.file !== lastArtifactFile) {
-      break;
+  if (
+    candidates.length === 0
+  ) {
+    candidates =
+      artifactList.filter(
+        function (item) {
+          return !excludedFiles.has(
+            item.file
+          );
+        }
+      );
+  }
+
+  const totalWeight =
+    candidates.reduce(
+      function (sum, item) {
+        return (
+          sum +
+          item.weight
+        );
+      },
+      0
+    );
+
+  const randomValue =
+    random(totalWeight);
+
+  let running = 0;
+
+  for (
+    const item
+    of candidates
+  ) {
+    running += item.weight;
+
+    if (
+      randomValue <= running
+    ) {
+      return item;
     }
   }
 
-  selectedArtifact = picked;
-  lastArtifactFile = selectedArtifact.file;
-
-  artifact.setAttribute("src", selectedArtifact.file);
-  artifact.setAttribute("camera-orbit", "0deg 75deg 3m");
-  artifact.setAttribute("field-of-view", "27deg");
-  artifact.style.display = "block";
-  artifact.style.opacity = "1";
-  artifact.style.transform = "scale(1)";
-  artifact.style.transformOrigin = "center center";
-
-  console.log("抽中的模型：", selectedArtifact.name);
+  return candidates[
+    candidates.length - 1
+  ];
 }
 
-function playOpenParticles() {
-  openProgress += 0.022;
+function shuffleArray(array) {
+  for (
+    let i =
+      array.length - 1;
+    i > 0;
+    i--
+  ) {
+    const j =
+      floor(
+        random(
+          i + 1
+        )
+      );
 
-  if (openProgress >= 1) {
-    opened = true;
-    opening = false;
+    const temporary =
+      array[i];
 
-    chooseRandomArtifact();
+    array[i] =
+      array[j];
 
-    theta = 0;
-    phi = 75;
-    radius = 3;
-    targetTheta = 0;
-    targetPhi = 75;
-    targetRadius = 3;
-    lastHandX = null;
-    heartHoldFrames = 0;
-
-    artifact.setAttribute("camera-orbit", "0deg 75deg 3m");
+    array[j] =
+      temporary;
   }
 }
 
-function updateParticles() {
+// =====================================================
+// 选择盲盒
+// =====================================================
+
+function updateBoxSelection() {
+  if (
+    gameStage !== "choosing"
+  ) {
+    return;
+  }
+
+  if (
+    predictions.length === 0 ||
+    !video
+  ) {
+    choiceHoldFrames = 0;
+    return;
+  }
+
+  const wristX =
+    predictions[0]
+      .landmarks[0][0];
+
+  const mirroredX =
+    video.width -
+    wristX;
+
+  let nextIndex;
+
+  if (
+    mirroredX <
+    video.width * 0.34
+  ) {
+    nextIndex = 0;
+  } else if (
+    mirroredX <
+    video.width * 0.67
+  ) {
+    nextIndex = 1;
+  } else {
+    nextIndex = 2;
+  }
+
+  selectedBoxIndex =
+    nextIndex;
+
+  if (
+    selectedBoxIndex !==
+    previousBoxIndex
+  ) {
+    choiceHoldFrames = 0;
+
+    previousBoxIndex =
+      selectedBoxIndex;
+  }
+
+  if (
+    stageFrame < 18
+  ) {
+    return;
+  }
+
+  if (
+    isPinch(
+      predictions[0]
+    )
+  ) {
+    choiceHoldFrames++;
+
+    if (
+      choiceHoldFrames >=
+      CHOICE_HOLD_TARGET
+    ) {
+      startOpeningSelectedBox();
+    }
+  } else {
+    choiceHoldFrames = 0;
+  }
+}
+
+// =====================================================
+// 绘制三个盲盒
+// =====================================================
+
+function drawChoiceBoxes(openAmount) {
+  const positions =
+    getBoxPositions();
+
+  for (
+    let i = 0;
+    i < positions.length;
+    i++
+  ) {
+    const isSelected =
+      i ===
+      selectedBoxIndex;
+
+    let fade = 1;
+
+    if (
+      gameStage === "opening" &&
+      !isSelected
+    ) {
+      fade =
+        map(
+          openAmount,
+          0,
+          1,
+          1,
+          0.22
+        );
+    }
+
+    drawSingleChoiceBox(
+      positions[i].x,
+      positions[i].y,
+      i,
+      isSelected,
+
+      gameStage === "opening" &&
+      isSelected
+        ? openAmount
+        : 0,
+
+      fade
+    );
+  }
+
+  fill("#3b2a1f");
+
+  textAlign(CENTER);
+  textStyle(BOLD);
+  textSize(22);
+
+  if (
+    gameStage === "choosing"
+  ) {
+    text(
+      "원하는 상자를 선택하세요",
+      getGameCenterX(),
+      165
+    );
+  } else {
+    text(
+      "선택한 상자를 개봉합니다",
+      getGameCenterX(),
+      165
+    );
+  }
+}
+
+function drawSingleChoiceBox(
+  x,
+  y,
+  index,
+  isSelected,
+  openAmount,
+  fade
+) {
+  push();
+
+  translate(
+    x,
+    y
+  );
+
+  if (
+    isSelected &&
+    gameStage === "choosing"
+  ) {
+    scale(
+      1 +
+      sin(
+        frameCount * 0.12
+      ) * 0.035
+    );
+  }
+
+  translate(
+    0,
+    isSelected
+      ? -12
+      : 0
+  );
+
+  drawingContext.shadowBlur =
+    isSelected
+      ? 36
+      : 18;
+
+  drawingContext.shadowColor =
+    isSelected
+      ? "rgba(226, 180, 76, 0.75)"
+      : "rgba(66, 45, 25, 0.32)";
+
+  rectMode(CENTER);
+
+  strokeWeight(
+    isSelected
+      ? 6
+      : 4
+  );
+
+  stroke(
+    204,
+    164,
+    88,
+    235 * fade
+  );
+
+  fill(
+    43,
+    73,
+    56,
+    238 * fade
+  );
+
+  rect(
+    0,
+    18,
+    164,
+    158,
+    23
+  );
+
+  push();
+
+  translate(
+    0,
+    -69 -
+    openAmount * 108
+  );
+
+  rotate(
+    -openAmount * 0.45
+  );
+
+  stroke(
+    204,
+    164,
+    88,
+    235 * fade
+  );
+
+  strokeWeight(
+    isSelected
+      ? 6
+      : 4
+  );
+
+  fill(
+    56,
+    91,
+    70,
+    245 * fade
+  );
+
+  rect(
+    0,
+    0,
+    180,
+    36,
+    13
+  );
+
+  pop();
+
   noStroke();
 
-  for (let i = particles.length - 1; i >= 0; i--) {
-    let p = particles[i];
+  fill(
+    218,
+    176,
+    84,
+    235 * fade
+  );
 
-    fill(255, 226, 120, p.alpha);
-    circle(p.x, p.y, p.size);
+  rect(
+    0,
+    -27,
+    173,
+    21,
+    10
+  );
 
-    p.x += p.vx;
-    p.y += p.vy;
-    p.vx *= 0.976;
-    p.vy *= 0.976;
+  fill(
+    255,
+    232,
+    150,
+    255 * fade
+  );
 
-    p.life--;
-    p.alpha *= 0.966;
+  textAlign(CENTER);
+  textStyle(BOLD);
+  textSize(58);
 
-    if (p.life <= 0 || p.alpha < 4) {
-      particles.splice(i, 1);
-    }
+  text(
+    "?",
+    0,
+    40
+  );
+
+  textStyle(NORMAL);
+  textSize(11);
+
+  fill(
+    238,
+    218,
+    168,
+    255 * fade
+  );
+
+  text(
+    "HERITAGE",
+    0,
+    76
+  );
+
+  if (
+    isSelected &&
+    gameStage === "choosing"
+  ) {
+    noFill();
+
+    stroke(236, 191, 82, 220);
+    strokeWeight(3);
+
+    circle(
+      0,
+      18,
+      210 +
+      sin(
+        frameCount * 0.1
+      ) * 8
+    );
+
+    noStroke();
+
+    fill("#8a5d20");
+
+    textStyle(BOLD);
+    textSize(13);
+
+    text(
+      "선택 중",
+      0,
+      123
+    );
+
+    fill(255, 248, 232, 175);
+
+    rect(
+      0,
+      143,
+      138,
+      11,
+      6
+    );
+
+    fill("#d7ad52");
+
+    const progressWidth =
+      map(
+        choiceHoldFrames,
+        0,
+        CHOICE_HOLD_TARGET,
+        0,
+        138
+      );
+
+    rectMode(CORNER);
+
+    rect(
+      -69,
+      137.5,
+
+      constrain(
+        progressWidth,
+        0,
+        138
+      ),
+
+      11,
+      6
+    );
+
+    rectMode(CENTER);
+  }
+
+  noStroke();
+
+  fill("#3b2a1f");
+
+  circle(
+    -62,
+    -88,
+    28
+  );
+
+  fill("#f4dc9b");
+
+  textStyle(BOLD);
+  textSize(14);
+
+  text(
+    index + 1,
+    -62,
+    -83
+  );
+
+  pop();
+}
+
+// =====================================================
+// 打开盲盒
+// =====================================================
+
+function startOpeningSelectedBox() {
+  if (
+    gameStage !== "choosing"
+  ) {
+    return;
+  }
+
+  startBackgroundMusic();
+
+  gameStage = "opening";
+  stageFrame = 0;
+  openingProgress = 0;
+
+  selectedRoundItem =
+    roundBoxes[
+      selectedBoxIndex
+    ];
+
+  choiceHoldFrames = 0;
+
+  const position =
+    getBoxPositions()[
+      selectedBoxIndex
+    ];
+
+  for (
+    let i = 0;
+    i < 180;
+    i++
+  ) {
+    particles.push(
+      createParticle(
+        position.x,
+        position.y - 35,
+        true
+      )
+    );
   }
 }
 
-function controlModelByHand() {
-  if (predictions.length === 0 || !video) return;
-
-  let hand = predictions[0];
-  let wrist = hand.landmarks[0];
-  let thumb = hand.landmarks[4];
-  let pinky = hand.landmarks[20];
-
-  let handX = wrist[0];
-  let handY = wrist[1];
-
-  if (lastHandX === null) {
-    lastHandX = handX;
+function updateOpeningAnimation() {
+  if (
+    gameStage !== "opening"
+  ) {
+    return;
   }
 
-  let dx = handX - lastHandX;
+  openingProgress += 0.022;
 
-  targetTheta += dx * 0.65;
-  targetTheta = ((targetTheta % 360) + 360) % 360;
+  if (
+    openingProgress < 1
+  ) {
+    return;
+  }
 
-  targetPhi = map(handY, 60, video.height - 60, 35, 115);
-  targetPhi = constrain(targetPhi, 35, 115);
+  openingProgress = 1;
 
-  lastHandX = handX;
+  if (
+    selectedRoundItem.type ===
+    "artifact"
+  ) {
+    startArtifactResult(
+      selectedRoundItem.data
+    );
+  } else {
+    startDudResult();
+  }
+}
 
-  let openSize = dist(thumb[0], thumb[1], pinky[0], pinky[1]);
+// =====================================================
+// 文物结果
+// =====================================================
 
-  targetRadius = map(openSize, 45, 230, 7.8, 0.42);
-  targetRadius = constrain(targetRadius, 0.42, 7.8);
+function startArtifactResult(item) {
+  gameStage =
+    "artifactResult";
 
-  theta = lerpAngle(theta, targetTheta, 0.1);
-  phi = lerp(phi, targetPhi, 0.09);
-  radius = lerp(radius, targetRadius, 0.12);
+  stageFrame = 0;
+
+  selectedArtifact = item;
+  lastArtifactFile = item.file;
+
+  resultGraceFrames = 0;
+
+  resetGestureArmed = false;
+  resetReleaseFrames = 0;
+  heartHoldFrames = 0;
+
+  theta = 0;
+  phi = 75;
+  radius = 3;
+
+  targetTheta = 0;
+  targetPhi = 75;
+  targetRadius = 3;
+
+  lastHandX = null;
+
+  artifactAnimY = 260;
+  artifactVelocityY = -20;
+  artifactGravity = 0.68;
+
+  artifactAnimScale = 0.58;
+  artifactSpinVelocity = 6.2;
+
+  artifactBounceCount = 0;
+  artifactAnimSettled = false;
+
+  impactPulse = 0;
+
+  artifact.setAttribute(
+    "src",
+    item.file
+  );
 
   artifact.setAttribute(
     "camera-orbit",
-    theta + "deg " + phi + "deg " + radius + "m"
+    "0deg 75deg 3m"
+  );
+
+  artifact.setAttribute(
+    "field-of-view",
+    "27deg"
+  );
+
+  artifact.setAttribute(
+    "shadow-intensity",
+    "0.9"
+  );
+
+  artifact.style.display = "block";
+  artifact.style.opacity = "1";
+
+  applyArtifactTransform();
+
+  playSoundEffect(
+    winSound,
+    0.75
+  );
+
+  for (
+    let i = 0;
+    i < 260;
+    i++
+  ) {
+    particles.push(
+      createParticle(
+        getGameCenterX(),
+        height / 2 + 70,
+        true
+      )
+    );
+  }
+}
+
+function updateArtifactAnimation() {
+  resultGraceFrames++;
+
+  if (
+    !artifactAnimSettled
+  ) {
+    artifactVelocityY +=
+      artifactGravity;
+
+    artifactAnimY +=
+      artifactVelocityY;
+
+    artifactAnimScale =
+      lerp(
+        artifactAnimScale,
+        1,
+        0.055
+      );
+
+    theta +=
+      artifactSpinVelocity;
+
+    artifactSpinVelocity *=
+      0.955;
+
+    if (
+      artifactAnimY >= 0
+    ) {
+      artifactAnimY = 0;
+      artifactBounceCount++;
+      impactPulse = 1;
+
+      if (
+        artifactBounceCount === 1
+      ) {
+        artifactVelocityY = -4.8;
+      } else if (
+        artifactBounceCount === 2
+      ) {
+        artifactVelocityY = -1.8;
+      } else {
+        artifactVelocityY = 0;
+        artifactAnimSettled = true;
+        targetTheta = theta;
+
+        artifact.setAttribute(
+          "shadow-intensity",
+          "0.8"
+        );
+      }
+    }
+
+    artifact.setAttribute(
+      "camera-orbit",
+
+      theta +
+      "deg " +
+      phi +
+      "deg " +
+      radius +
+      "m"
+    );
+
+    applyArtifactTransform();
+  } else {
+    artifactAnimY =
+      lerp(
+        artifactAnimY,
+        0,
+        0.2
+      );
+
+    artifactAnimScale =
+      lerp(
+        artifactAnimScale,
+        1,
+        0.15
+      );
+
+    applyArtifactTransform();
+
+    controlModelByHand();
+  }
+}
+
+function applyArtifactTransform() {
+  artifact.style.transform =
+    "translate3d(0, " +
+    artifactAnimY +
+    "px, 0) scale(" +
+    artifactAnimScale +
+    ")";
+}
+
+function controlModelByHand() {
+  if (
+    !artifactAnimSettled
+  ) {
+    return;
+  }
+
+  if (
+    predictions.length === 0 ||
+    !video
+  ) {
+    targetTheta += 0.16;
+
+    theta =
+      lerpAngle(
+        theta,
+        targetTheta,
+        0.06
+      );
+
+    artifact.setAttribute(
+      "camera-orbit",
+
+      theta +
+      "deg " +
+      phi +
+      "deg " +
+      radius +
+      "m"
+    );
+
+    return;
+  }
+
+  const hand = predictions[0];
+
+  const wrist =
+    hand.landmarks[0];
+
+  const thumb =
+    hand.landmarks[4];
+
+  const pinky =
+    hand.landmarks[20];
+
+  const handX =
+    wrist[0];
+
+  const handY =
+    wrist[1];
+
+  if (
+    lastHandX === null
+  ) {
+    lastHandX = handX;
+  }
+
+  const differenceX =
+    handX -
+    lastHandX;
+
+  if (
+    abs(
+      differenceX
+    ) < 0.7
+  ) {
+    targetTheta += 0.12;
+  } else {
+    targetTheta +=
+      differenceX * 0.65;
+  }
+
+  targetTheta =
+    (
+      (
+        targetTheta %
+        360
+      ) +
+      360
+    ) %
+    360;
+
+  targetPhi =
+    constrain(
+      map(
+        handY,
+        60,
+        video.height - 60,
+        35,
+        115
+      ),
+
+      35,
+      115
+    );
+
+  lastHandX = handX;
+
+  const openSize =
+    dist(
+      thumb[0],
+      thumb[1],
+      pinky[0],
+      pinky[1]
+    );
+
+  targetRadius =
+    constrain(
+      map(
+        openSize,
+        45,
+        230,
+        7.8,
+        0.42
+      ),
+
+      0.42,
+      7.8
+    );
+
+  theta =
+    lerpAngle(
+      theta,
+      targetTheta,
+      0.1
+    );
+
+  phi =
+    lerp(
+      phi,
+      targetPhi,
+      0.09
+    );
+
+  radius =
+    lerp(
+      radius,
+      targetRadius,
+      0.12
+    );
+
+  artifact.setAttribute(
+    "camera-orbit",
+
+    theta +
+    "deg " +
+    phi +
+    "deg " +
+    radius +
+    "m"
   );
 }
 
-function drawOpenedOverlay() {
+// =====================================================
+// 缩窄后的左下角文物介绍框
+// =====================================================
+
+function drawArtifactResultOverlay() {
+  const pulseAlpha =
+    impactPulse * 75;
+
+  if (
+    pulseAlpha > 1
+  ) {
+    noStroke();
+
+    fill(
+      255,
+      231,
+      156,
+      pulseAlpha
+    );
+
+    circle(
+      getGameCenterX(),
+      height / 2,
+      500 +
+      impactPulse * 100
+    );
+  }
+
+  const panelX = 24;
+  const panelWidth = 390;
+  const panelHeight = 188;
+
+  const panelY =
+    height -
+    panelHeight -
+    28;
+
   noStroke();
-  fill(255, 248, 232, 188);
-  rect(36, height - 260, 545, 220, 24);
+
+  fill(
+    255,
+    248,
+    232,
+    205
+  );
+
+  rect(
+    panelX,
+    panelY,
+    panelWidth,
+    panelHeight,
+    20
+  );
+
+  noFill();
+
+  stroke(
+    139,
+    104,
+    58,
+    100
+  );
+
+  strokeWeight(1.2);
+
+  rect(
+    panelX,
+    panelY,
+    panelWidth,
+    panelHeight,
+    20
+  );
+
+  noStroke();
 
   fill("#3b2a1f");
+
   textAlign(LEFT);
   textStyle(BOLD);
-  textSize(18);
+  textSize(15);
 
-  if (selectedArtifact) {
-    text("개봉 완료!  " + selectedArtifact.name, 62, height - 218);
-  } else {
-    text("개봉 완료!", 62, height - 218);
+  if (
+    selectedArtifact
+  ) {
+    text(
+      "개봉 완료!  " +
+      selectedArtifact.name,
+
+      panelX + 22,
+      panelY + 32
+    );
   }
 
   textStyle(NORMAL);
-  textSize(14);
+  textSize(12);
+
   fill("#5d4937");
 
-  if (selectedArtifact && selectedArtifact.desc) {
+  if (
+    selectedArtifact &&
+    selectedArtifact.desc
+  ) {
     textWrap(WORD);
-    text(selectedArtifact.desc, 62, height - 190, 480);
+
+    text(
+      selectedArtifact.desc,
+
+      panelX + 22,
+      panelY + 53,
+
+      panelWidth - 44,
+      61
+    );
   }
 
-  textSize(13);
+  textSize(11);
+
   fill("#6b5540");
-  text("좌우 이동: 좌우 회전", 62, height - 96);
-  text("위아래 이동: 상하 회전", 62, height - 74);
-  text("손바닥 펼치기: 확대 / 주먹 쥐기: 축소", 62, height - 52);
+
+  text(
+    "좌우 이동: 좌우 회전",
+    panelX + 22,
+    panelY + 123
+  );
+
+  text(
+    "위아래 이동: 상하 회전",
+    panelX + 22,
+    panelY + 141
+  );
+
+  text(
+    "손바닥 펼치기: 확대 / 주먹 쥐기: 축소",
+    panelX + 22,
+    panelY + 159
+  );
 
   fill("#8a5d20");
-  textStyle(BOLD);
-  text("손가락 하트: 부드럽게 다시 뽑기", 62, height - 28);
 
-  if (heartHoldFrames > 0) {
-    fill("#d7ad52");
-    noStroke();
-    let w = map(heartHoldFrames, 0, 28, 0, 220);
-    rect(62, height - 18, w, 6, 4);
+  textStyle(BOLD);
+  textSize(11);
+
+  if (
+    artifactAnimSettled
+  ) {
+    text(
+      "손가락 하트: 다시 뽑기",
+      panelX + 22,
+      panelY + 178
+    );
+  } else {
+    text(
+      "문물이 안정될 때까지 기다려 주세요",
+      panelX + 22,
+      panelY + 178
+    );
+  }
+
+  drawResetProgressBar(
+    panelX + 190,
+    panelY + 171,
+    170
+  );
+}
+
+// =====================================================
+// 空盒结果
+// =====================================================
+
+function startDudResult() {
+  gameStage = "dudResult";
+  stageFrame = 0;
+
+  selectedArtifact = null;
+
+  resultGraceFrames = 0;
+
+  resetGestureArmed = false;
+  resetReleaseFrames = 0;
+  heartHoldFrames = 0;
+
+  artifact.style.display = "none";
+
+  const position =
+    getBoxPositions()[
+      selectedBoxIndex
+    ];
+
+  const targetX =
+    getGameCenterX();
+
+  dudPaper = {
+    x: position.x,
+    y: position.y - 30,
+
+    vx:
+      (
+        targetX -
+        position.x
+      ) / 52 +
+      random(
+        -0.6,
+        0.6
+      ),
+
+    vy: -17.5,
+    gravity: 0.53,
+
+    angle:
+      random(
+        -0.3,
+        0.3
+      ),
+
+    angularVelocity:
+      random(
+        0.13,
+        0.19
+      ) *
+      (
+        random() > 0.5
+          ? 1
+          : -1
+      ),
+
+    scale: 0.42,
+    bounceCount: 0,
+
+    settled: false,
+    soundPlayed: false,
+
+    floorY:
+      height / 2 + 55
+  };
+
+  for (
+    let i = 0;
+    i < 110;
+    i++
+  ) {
+    particles.push(
+      createParticle(
+        position.x,
+        position.y - 45,
+        true
+      )
+    );
   }
 }
 
-// 检测“手指比心”：拇指尖和食指尖靠近
-function isFingerHeart(hand) {
-  let thumbTip = hand.landmarks[4];
-  let indexTip = hand.landmarks[8];
+function drawDudBackgroundBoxes() {
+  const positions =
+    getBoxPositions();
 
-  let d = dist(
-    thumbTip[0],
-    thumbTip[1],
-    indexTip[0],
-    indexTip[1]
+  for (
+    let i = 0;
+    i < positions.length;
+    i++
+  ) {
+    const isSelected =
+      i ===
+      selectedBoxIndex;
+
+    drawSingleChoiceBox(
+      positions[i].x,
+      positions[i].y,
+      i,
+      isSelected,
+
+      isSelected
+        ? 1
+        : 0,
+
+      isSelected
+        ? 0.82
+        : 0.2
+    );
+  }
+
+  noStroke();
+
+  fill(72, 49, 30, 32);
+
+  rect(
+    0,
+    130,
+    width,
+    height - 130
+  );
+}
+
+function updateDudPaper() {
+  resultGraceFrames++;
+
+  if (
+    !dudPaper
+  ) {
+    return;
+  }
+
+  if (
+    !dudPaper.settled
+  ) {
+    dudPaper.x +=
+      dudPaper.vx;
+
+    dudPaper.y +=
+      dudPaper.vy;
+
+    dudPaper.vy +=
+      dudPaper.gravity;
+
+    dudPaper.angle +=
+      dudPaper.angularVelocity;
+
+    dudPaper.angularVelocity *=
+      0.988;
+
+    dudPaper.scale =
+      lerp(
+        dudPaper.scale,
+        0.9,
+        0.045
+      );
+
+    if (
+      dudPaper.y >=
+      dudPaper.floorY
+    ) {
+      dudPaper.y =
+        dudPaper.floorY;
+
+      dudPaper.bounceCount++;
+
+      if (
+        dudPaper.bounceCount === 1
+      ) {
+        dudPaper.vy = -5.2;
+        dudPaper.vx *= 0.62;
+
+        dudPaper.angularVelocity *=
+          -0.36;
+      } else if (
+        dudPaper.bounceCount === 2
+      ) {
+        dudPaper.vy = -1.8;
+        dudPaper.vx *= 0.45;
+
+        dudPaper.angularVelocity *=
+          -0.24;
+      } else {
+        dudPaper.vy = 0;
+        dudPaper.vx = 0;
+
+        dudPaper.settled = true;
+
+        if (
+          !dudPaper.soundPlayed
+        ) {
+          playSoundEffect(
+            loseSound,
+            0.82
+          );
+
+          dudPaper.soundPlayed =
+            true;
+        }
+      }
+    }
+  } else {
+    dudPaper.x =
+      lerp(
+        dudPaper.x,
+        getGameCenterX(),
+        0.075
+      );
+
+    dudPaper.y =
+      lerp(
+        dudPaper.y,
+        height / 2 + 25,
+        0.075
+      );
+
+    dudPaper.angle =
+      lerp(
+        dudPaper.angle,
+        0,
+        0.1
+      );
+
+    dudPaper.scale =
+      lerp(
+        dudPaper.scale,
+        1,
+        0.08
+      );
+  }
+}
+
+function drawDudPaper() {
+  if (
+    !dudPaper
+  ) {
+    return;
+  }
+
+  push();
+
+  translate(
+    dudPaper.x,
+    dudPaper.y
   );
 
-  return d < 55;
+  rotate(
+    dudPaper.angle
+  );
+
+  scale(
+    dudPaper.scale
+  );
+
+  drawingContext.shadowBlur = 32;
+  drawingContext.shadowColor =
+    "rgba(65, 42, 22, 0.5)";
+
+  rectMode(CENTER);
+
+  stroke(126, 88, 45, 190);
+  strokeWeight(2);
+
+  fill(247, 229, 184, 250);
+
+  rect(
+    0,
+    0,
+    176,
+    356,
+    16
+  );
+
+  noStroke();
+
+  fill(225, 196, 131, 240);
+
+  rect(
+    0,
+    -166,
+    192,
+    24,
+    12
+  );
+
+  rect(
+    0,
+    166,
+    192,
+    24,
+    12
+  );
+
+  stroke(143, 103, 55, 105);
+  strokeWeight(1);
+
+  line(
+    -66,
+    -125,
+    66,
+    -125
+  );
+
+  line(
+    -66,
+    118,
+    66,
+    118
+  );
+
+  noStroke();
+
+  fill("#6b4a2d");
+
+  textAlign(CENTER);
+  textStyle(NORMAL);
+  textSize(14);
+
+  text(
+    "오늘의 뽑기 운세",
+    0,
+    -138
+  );
+
+  fill("#8f2f24");
+
+  textStyle(BOLD);
+  textSize(78);
+
+  text(
+    "꽝",
+    0,
+    18
+  );
+
+  fill("#5a402b");
+
+  textSize(17);
+
+  text(
+    "아쉽지만",
+    0,
+    78
+  );
+
+  text(
+    "다시 도전해 보세요",
+    0,
+    104
+  );
+
+  fill("#9a7445");
+
+  circle(
+    0,
+    138,
+    30
+  );
+
+  fill(247, 229, 184);
+
+  textSize(13);
+
+  text(
+    "運",
+    0,
+    143
+  );
+
+  pop();
+}
+
+function drawDudResultOverlay() {
+  if (
+    !dudPaper ||
+    !dudPaper.settled
+  ) {
+    return;
+  }
+
+  noStroke();
+
+  fill(255, 248, 232, 198);
+
+  rect(
+    28,
+    height - 142,
+    350,
+    102,
+    20
+  );
+
+  fill("#3b2a1f");
+
+  textAlign(LEFT);
+  textStyle(BOLD);
+  textSize(17);
+
+  text(
+    "이번 상자는 꽝입니다",
+    50,
+    height - 105
+  );
+
+  fill("#6b5540");
+
+  textStyle(NORMAL);
+  textSize(12);
+
+  text(
+    "손가락 하트 동작으로 다시 도전할 수 있습니다",
+    50,
+    height - 78
+  );
+
+  fill("#8a5d20");
+
+  textStyle(BOLD);
+
+  text(
+    "손가락 하트: 다시 뽑기",
+    50,
+    height - 53
+  );
+
+  drawResetProgressBar(
+    50,
+    height - 43,
+    190
+  );
+}
+
+// =====================================================
+// 捏合与重置
+// =====================================================
+
+function isPinch(hand) {
+  const thumbTip =
+    hand.landmarks[4];
+
+  const indexTip =
+    hand.landmarks[8];
+
+  return (
+    dist(
+      thumbTip[0],
+      thumbTip[1],
+      indexTip[0],
+      indexTip[1]
+    ) < 55
+  );
 }
 
 function checkHeartReset() {
-  if (!opened || resetAnimation || predictions.length === 0) {
+  const resultReady =
+    (
+      gameStage ===
+        "artifactResult" &&
+      artifactAnimSettled
+    ) ||
+    (
+      gameStage ===
+        "dudResult" &&
+      dudPaper &&
+      dudPaper.settled
+    );
+
+  if (
+    !resultReady ||
+    resultGraceFrames < 55 ||
+    predictions.length === 0
+  ) {
     heartHoldFrames = 0;
     return;
   }
 
-  let hand = predictions[0];
+  const pinching =
+    isPinch(
+      predictions[0]
+    );
 
-  if (isFingerHeart(hand)) {
+  if (
+    !resetGestureArmed
+  ) {
+    if (
+      !pinching
+    ) {
+      resetReleaseFrames++;
+
+      if (
+        resetReleaseFrames >= 12
+      ) {
+        resetGestureArmed = true;
+      }
+    } else {
+      resetReleaseFrames = 0;
+    }
+
+    heartHoldFrames = 0;
+    return;
+  }
+
+  if (
+    pinching
+  ) {
     heartHoldFrames++;
 
-    if (heartHoldFrames >= 28) {
+    if (
+      heartHoldFrames >=
+      RESET_HOLD_TARGET
+    ) {
       startResetAnimation();
       heartHoldFrames = 0;
     }
@@ -663,79 +2921,384 @@ function checkHeartReset() {
   }
 }
 
-// 开始播放重新抽取过渡动画
+function drawResetProgressBar(
+  x,
+  y,
+  maxWidth
+) {
+  if (
+    !resetGestureArmed &&
+    resultGraceFrames >= 55
+  ) {
+    fill(111, 82, 52, 115);
+
+    textStyle(NORMAL);
+    textSize(11);
+    textAlign(LEFT);
+
+    text(
+      "먼저 손가락을 벌려 주세요",
+      x,
+      y + 2
+    );
+
+    return;
+  }
+
+  if (
+    heartHoldFrames <= 0
+  ) {
+    return;
+  }
+
+  noStroke();
+
+  fill(255, 255, 255, 145);
+
+  rect(
+    x,
+    y,
+    maxWidth,
+    7,
+    4
+  );
+
+  fill("#d7ad52");
+
+  const progressWidth =
+    map(
+      heartHoldFrames,
+      0,
+      RESET_HOLD_TARGET,
+      0,
+      maxWidth
+    );
+
+  rect(
+    x,
+    y,
+
+    constrain(
+      progressWidth,
+      0,
+      maxWidth
+    ),
+
+    7,
+    4
+  );
+}
+
+// =====================================================
+// 重置动画
+// =====================================================
+
 function startResetAnimation() {
-  resetAnimation = true;
+  gameStage = "resetting";
   resetProgress = 0;
+
   particles = [];
 
-  for (let i = 0; i < 120; i++) {
-    particles.push(createParticle(width / 2, height / 2 + 20, true));
+  for (
+    let i = 0;
+    i < 140;
+    i++
+  ) {
+    particles.push(
+      createParticle(
+        getGameCenterX(),
+        height / 2 + 20,
+        true
+      )
+    );
   }
 }
 
-// 播放重新抽取过渡动画
 function playResetAnimation() {
   resetProgress += 0.018;
 
-  let fade = constrain(1 - resetProgress, 0, 1);
-  let scaleValue = constrain(1 - resetProgress * 0.18, 0.82, 1);
+  const fade =
+    constrain(
+      1 - resetProgress,
+      0,
+      1
+    );
 
-  artifact.style.opacity = fade;
-  artifact.style.transform = "scale(" + scaleValue + ")";
-  artifact.style.transformOrigin = "center center";
+  const scaleValue =
+    constrain(
+      1 -
+      resetProgress * 0.18,
+      0.82,
+      1
+    );
+
+  if (
+    artifact
+  ) {
+    artifact.style.opacity =
+      fade;
+
+    artifact.style.transform =
+      "translate3d(0, " +
+      artifactAnimY +
+      "px, 0) scale(" +
+      scaleValue +
+      ")";
+  }
+
+  if (
+    dudPaper
+  ) {
+    dudPaper.scale *= 0.985;
+  }
 
   noStroke();
-  fill(255, 248, 232, resetProgress * 175);
-  rect(0, 0, width, height);
+
+  fill(
+    255,
+    248,
+    232,
+    resetProgress * 190
+  );
+
+  rect(
+    0,
+    0,
+    width,
+    height
+  );
 
   fill("#3b2a1f");
+
   textAlign(CENTER);
   textStyle(BOLD);
   textSize(28);
-  text("다시 뽑기 준비 중...", width / 2, height / 2 + 15);
 
-  if (resetProgress >= 1) {
+  text(
+    "다시 뽑기 준비 중...",
+    width / 2,
+    height / 2 + 15
+  );
+
+  if (
+    resetProgress >= 1
+  ) {
     finishResetBlindBox();
   }
 }
 
-// 动画结束后回到盲盒状态
 function finishResetBlindBox() {
-  resetAnimation = false;
   resetProgress = 0;
 
-  opened = false;
-  opening = false;
+  gameStage = "shaking";
+  stageFrame = 0;
 
   shakeCount = 0;
   lastShakeX = null;
   shakeCooldown = 0;
-  openProgress = 0;
-  particles = [];
 
+  roundBoxes = [];
+
+  selectedBoxIndex = 1;
+  previousBoxIndex = 1;
+
+  choiceHoldFrames = 0;
+  openingProgress = 0;
+
+  selectedRoundItem = null;
   selectedArtifact = null;
-  lastHandX = null;
+
   heartHoldFrames = 0;
+
+  resetGestureArmed = false;
+  resetReleaseFrames = 0;
+  resultGraceFrames = 0;
+
+  dudPaper = null;
+  particles = [];
 
   theta = 0;
   phi = 75;
   radius = 3;
+
   targetTheta = 0;
   targetPhi = 75;
   targetRadius = 3;
 
+  lastHandX = null;
+
+  artifactAnimY = 0;
+  artifactVelocityY = 0;
+  artifactAnimScale = 1;
+
+  artifactSpinVelocity = 0;
+  artifactBounceCount = 0;
+
+  artifactAnimSettled = false;
+  impactPulse = 0;
+
   artifact.style.display = "none";
   artifact.style.opacity = "1";
-  artifact.style.transform = "scale(1)";
-  artifact.setAttribute("camera-orbit", "0deg 75deg 3m");
+
+  artifact.style.transform =
+    "translate3d(0, 0, 0) scale(1)";
+
+  artifact.setAttribute(
+    "camera-orbit",
+    "0deg 75deg 3m"
+  );
+
+  artifact.setAttribute(
+    "shadow-intensity",
+    "0.85"
+  );
+
+  startBackgroundMusic();
 }
 
-function lerpAngle(a, b, t) {
-  let diff = ((b - a + 540) % 360) - 180;
-  return a + diff * t;
+// =====================================================
+// 粒子
+// =====================================================
+
+function createParticle(
+  centerX,
+  centerY,
+  big
+) {
+  const angle =
+    random(TWO_PI);
+
+  const speed =
+    big
+      ? random(2.2, 9.2)
+      : random(0.8, 2.8);
+
+  return {
+    x:
+      centerX +
+      random(-90, 90),
+
+    y:
+      centerY +
+      random(-70, 70),
+
+    vx:
+      cos(angle) *
+      speed,
+
+    vy:
+      sin(angle) *
+      speed,
+
+    size:
+      big
+        ? random(3, 9)
+        : random(2, 5),
+
+    life:
+      big
+        ? random(90, 145)
+        : random(45, 70),
+
+    alpha:
+      big
+        ? random(145, 230)
+        : random(90, 150)
+  };
+}
+
+function updateParticles() {
+  noStroke();
+
+  for (
+    let i =
+      particles.length - 1;
+    i >= 0;
+    i--
+  ) {
+    const particle =
+      particles[i];
+
+    fill(
+      255,
+      226,
+      120,
+      particle.alpha
+    );
+
+    circle(
+      particle.x,
+      particle.y,
+      particle.size
+    );
+
+    particle.x +=
+      particle.vx;
+
+    particle.y +=
+      particle.vy;
+
+    particle.vx *= 0.976;
+    particle.vy *= 0.976;
+
+    particle.life--;
+    particle.alpha *= 0.966;
+
+    if (
+      particle.life <= 0 ||
+      particle.alpha < 4
+    ) {
+      particles.splice(
+        i,
+        1
+      );
+    }
+  }
+}
+
+// =====================================================
+// 工具函数
+// =====================================================
+
+function lerpAngle(
+  angleA,
+  angleB,
+  amount
+) {
+  const difference =
+    (
+      (
+        angleB -
+        angleA +
+        540
+      ) %
+      360
+    ) -
+    180;
+
+  return (
+    angleA +
+    difference * amount
+  );
 }
 
 function windowResized() {
-  resizeCanvas(windowWidth, windowHeight);
+  resizeCanvas(
+    windowWidth,
+    windowHeight
+  );
+
+  if (
+    dudPaper &&
+    dudPaper.settled
+  ) {
+    dudPaper.x =
+      getGameCenterX();
+
+    dudPaper.y =
+      height / 2 + 25;
+
+    dudPaper.floorY =
+      height / 2 + 55;
+  }
 }
